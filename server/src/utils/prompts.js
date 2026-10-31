@@ -54,7 +54,7 @@ The user payload includes deterministic ruleSignals. For every non-empty signal 
 
 Use only these categories: long_sentence, passive_voice, filler_words, unexplained_jargon, repetitive_wording, difficult_paragraph.
 
-Return strict JSON with an issues array of { category, excerpt, explanation, suggestion, severity } and an overallNote string. Copy excerpts exactly from the draft. Each suggestion must be a specific, independently applicable rewrite that preserves facts and intent. Do not use generic advice as the rewrite. Preserve all numeric findings, percentages, dates, denominators, comparison directions, and citation markers exactly; only remove a number when it is a clearly duplicated part of an awkward phrase such as "86% in 86% of instances," and retain the single intended 86% statistic. Do not introduce claims or alter numerical findings. severity must be high, medium, or low.
+Return strict JSON with an issues array of { category, excerpt, explanation, suggestion, severity } and an overallNote string. Copy excerpts exactly from the draft. Every issue must have a non-empty, actionable suggestion string: provide a specific, independently applicable rewrite that addresses the issue and preserves facts and intent. Never omit suggestion or return it as null, empty, whitespace-only, or another type. Do not use generic advice as the rewrite. Preserve all numeric findings, percentages, dates, denominators, comparison directions, and citation markers exactly; only remove a number when it is a clearly duplicated part of an awkward phrase such as "86% in 86% of instances," and retain the single intended 86% statistic. Do not introduce claims or alter numerical findings. severity must be high, medium, or low.
 `.trim()
 
 export const rewriteSystem = `

@@ -162,13 +162,24 @@ function removeRepeatedSentences(text) {
     })
     .join(' ')
 }
-
 function numericFacts(text) {
+  const normalized = normalizeStatisticalNumberWords(
+    normalizeRedundantPercentage(removeRepeatedSentences(text))
+  )
+    // Remove citation markers such as [1]
+    .replace(/\[\s*\d+\s*\]/g, '')
+    // Remove source labels such as Source 1 and Sources 1 and 2
+    .replace(/\bSources?\s*\(?\s*\d+(?:\s*(?:,|and|&)\s*\d+)*\s*\)?/gi, '')
+    // Remove numbered list prefixes such as 1. or 2)
+    .replace(/(^|\n)\s*\d+[.)]\s+/g, '$1')
+
   return (
-    normalizeStatisticalNumberWords(normalizeRedundantPercentage(removeRepeatedSentences(text)))
-      .replace(/\[\d+\]/g, '')
-      .match(/\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:%|percent(?:age points?)?))?/gi) || []
-  ).map((fact) => fact.toLowerCase().replace(/,/g, '').replace(/\s+/g, ''))
+    normalized.match(
+      /\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:%|percent(?:age points?)?))?/gi
+    ) || []
+  ).map((fact) =>
+    fact.toLowerCase().replace(/,/g, '').replace(/\s+/g, '')
+  )
 }
 
 function sameValues(left, right) {
@@ -182,6 +193,81 @@ function sameCitationMarkers(left, right) {
   const leftMarkers = [...new Set(left.match(/\[\d+\]/g) || [])]
   const rightMarkers = [...new Set(right.match(/\[\d+\]/g) || [])]
   return sameValues(leftMarkers, rightMarkers)
+}
+
+function fallbackWritingSuggestion(issue) {
+  const excerpt = issue.excerpt.trim()
+  if (!excerpt || typeof issue.explanation !== 'string' || !issue.explanation.trim()) return null
+
+  let suggestion = excerpt
+  if (issue.category === 'filler_words') {
+    suggestion = suggestion
+      .replace(
+        /\b(?:it is important to note that|at the end of the day|in order to|very|really|just|quite|actually|basically)\b/gi,
+        '',
+      )
+      .replace(/\s+([,.!?;:])/g, '$1')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+  } else if (issue.category === 'repetitive_wording') {
+    suggestion = normalizeRedundantPercentage(removeRepeatedSentences(suggestion))
+      .replace(/\b(\w+)(?:\s+\1)+\b/gi, '$1')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+  } else if (issue.category === 'long_sentence') {
+    suggestion = suggestion.replace(/,\s+(and|but|so|yet)\s+/i, (_, conjunction) => {
+      return `. ${conjunction[0].toUpperCase()}${conjunction.slice(1)} `
+    })
+  } else if (issue.category === 'difficult_paragraph') {
+    suggestion = suggestion.replace(/(?<=[.!?])\s+(?=[A-Z])/g, '\n\n')
+  } else if (issue.category === 'unexplained_jargon') {
+    const definitions = new Map([
+      ['LLM', 'large language model'],
+      ['RAG', 'retrieval-augmented generation'],
+      ['vector database', 'database that stores vector embeddings'],
+      ['inference', 'model generation'],
+      ['fine-tuning', 'additional model training'],
+      ['API', 'application programming interface'],
+      ['transformer', 'transformer neural network'],
+      ['agentic', 'able to take actions toward a goal'],
+    ])
+    for (const [term, definition] of definitions) {
+      const pattern = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
+      if (pattern.test(suggestion)) {
+        suggestion = suggestion.replace(pattern, (match) => `${match} (${definition})`)
+        break
+      }
+    }
+  } else if (issue.category === 'passive_voice') {
+    const activeVoice = suggestion.match(/^(.+?)\s+was\s+(\w+ed)\s+by\s+([^,.!?]+)([,.!?]?)$/i)
+    if (activeVoice) {
+      const [, subject, verb, agent, punctuation] = activeVoice
+      suggestion = `${agent} ${verb} ${subject}${punctuation}`
+    }
+  }
+
+  const normalized = suggestion.trim()
+  return normalized &&
+    normalized !== excerpt &&
+    normalized.length <= 4000 &&
+    sameValues(numericFacts(excerpt), numericFacts(normalized)) &&
+    sameCitationMarkers(excerpt, normalized)
+    ? normalized
+    : null
+}
+
+function normalizeWritingResponse(value) {
+  if (!value || typeof value !== 'object' || !Array.isArray(value.issues)) return value
+  return {
+    ...value,
+    issues: value.issues.map((issue) => {
+      if (!issue || typeof issue !== 'object') return issue
+      if (typeof issue.suggestion === 'string' && issue.suggestion.trim()) return issue
+      if (typeof issue.excerpt !== 'string') return issue
+      const suggestion = fallbackWritingSuggestion(issue)
+      return suggestion ? { ...issue, suggestion } : issue
+    }),
+  }
 }
 
 function collectBriefText(value, key = '') {
@@ -281,6 +367,7 @@ function researchResultFor(material) {
         'comparison.contradictions',
       ].flatMap((path) => {
         const items = path.split('.').reduce((value, key) => value[key], brief)
+
         return items.map((item, index) => ({
           path: [...path.split('.'), index],
           text:
@@ -302,23 +389,33 @@ function researchResultFor(material) {
         ),
       ),
     ]
-    const sourcesById = new Map(material.map((source) => [source.id, source.content]))
+
+    const sourcesById = new Map(
+      material.map((source) => [source.id, source.content]),
+    )
+
     for (const statement of statements) {
       const citedContent = (statement.sourceIds || [])
         .map((id) => sourcesById.get(id) || '')
         .join(' ')
-      for (const fact of numericFacts(statement.text)) {
-        const supportedSingleSourceCount =
-          fact === '1' &&
-          material.length === 1 &&
-          statement.path[0] === 'comparison' &&
-          /\b(?:source|document|article)\b/i.test(statement.text)
-        if (!supportedSingleSourceCount && !numericFactsSupported(fact, citedContent))
+
+      const textForValidation = statement.text
+        // Ignore source identifiers such as Source 1 and Article 2
+        .replace(
+          /\b(?:sources?|documents?|articles?)\s*#?\s*\d+\b/gi,
+          '',
+        )
+        // Ignore numbered list prefixes
+        .replace(/(^|\n)\s*\d+[.)]\s+/g, '$1')
+
+      for (const fact of numericFacts(textForValidation)) {
+        if (!numericFactsSupported(fact, citedContent)) {
           ctx.addIssue({
             code: 'custom',
             path: statement.path,
             message: `Numerical finding "${fact}" is not present in the cited source.`,
           })
+        }
       }
     }
   })
@@ -736,7 +833,7 @@ export async function analyzeWriting({ text }) {
     user: JSON.stringify({ draft: text, ruleSignals }),
     maxTokens: 4500,
     responseSchema: writingResponseSchema,
-    validateResponse: (value) => writingResultFor(text).safeParse(value),
+    validateResponse: (value) => writingResultFor(text).safeParse(normalizeWritingResponse(value)),
     invalidOutput: {
       code: 'INVALID_WRITING_OUTPUT',
       message: 'The AI response did not match the writing feedback format. Try again.',

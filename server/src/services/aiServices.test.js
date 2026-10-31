@@ -506,6 +506,44 @@ test('writing feedback retries denominator and citation changes while detecting 
   assert.match(result.analysis.issues[0].suggestion, /\[2\]/)
 })
 
+test('writing feedback normalizes missing and invalid suggestions before validation', async () => {
+  const excerpt = 'The system is very useful.'
+  const issue = {
+    category: 'filler_words',
+    excerpt,
+    explanation: 'The filler word weakens this sentence.',
+    severity: 'low',
+  }
+  const requests = configureResearchResponses([
+    {
+      issues: [
+        { ...issue },
+        { ...issue, suggestion: null },
+        { ...issue, suggestion: '' },
+        { ...issue, suggestion: 42 },
+      ],
+      overallNote: 'The draft has one filler word.',
+    },
+  ])
+
+  const result = await analyzeWriting({ text: excerpt })
+
+  assert.equal(requests.length, 1)
+  assert.match(
+    requests[0].systemInstruction.parts[0].text,
+    /Every issue must have a non-empty, actionable suggestion string/,
+  )
+  assert.deepEqual(
+    result.analysis.issues.map((item) => item.suggestion),
+    [
+      'The system is useful.',
+      'The system is useful.',
+      'The system is useful.',
+      'The system is useful.',
+    ],
+  )
+})
+
 test('rewrite retries numerical changes and keeps valid statistics and citations unchanged', async () => {
   const sentence =
     'In 38 cases, analysts switched 60% of the time when the agent disagreed [1], versus 6% when it agreed [2].'
