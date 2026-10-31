@@ -1,0 +1,21 @@
+{
+  "name": "editorial-ai",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -n client,server -c cyan,magenta \"npm:dev:client\" \"npm:dev:server\"",
+    "dev:client": "npm --workspace client run dev",
+    "dev:server": "npm --workspace server run dev",
+    "build": "npm --workspace client run build",
+    "format": "prettier --write \"client/**/*.{js,jsx,css,html,json}\" \"server/**/*.{js,json}\" README.md package.json .prettierrc.json",
+    "format:check": "prettier --check \"client/**/*.{js,jsx,css,html,json}\" \"server/**/*.{js,json}\" README.md package.json .prettierrc.json"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "prettier": "^3.9.10"
+  }
+}
